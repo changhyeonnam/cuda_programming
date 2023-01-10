@@ -1,2 +1,1 @@
-*.cu linguist-vendored
-*.ipynb linguist-vendored=false
+*.ipynb linguist-detectable=false
