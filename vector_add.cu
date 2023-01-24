@@ -1,3 +1,7 @@
+//
+// Created by changhyeonnam on 2023/01/10.
+//
+
 #include <algorithm>
 #include <cassert>
 #include <iostream>
@@ -8,89 +12,91 @@
 __global__ void vectorAdd(const int *__restrict a, const int *__restrict b,
                           int *__restrict c, int N){
     // Calculate global thread ID
+    // blockDim = 1 dim (just integer)
     int tid = (blockIdx.x * blockDim.x) + threadIdx.x;
 
     // Boundary check
-    if (tid<N) c[tid] = a[tid] + b[tid];
+    if (tid<N)
+        // Each thread adds a single element
+        c[tid] = a[tid] + b[tid];
 }
 
+// Initialize vector of size n to int between 0~99
+void matrix_init(int* a, int n){
+    for(int i=0; i<n; i++){
+        a[i] = rand() % 100;
+    }
+}
 // Check vector add result
-void verify_result(std::vector<int>&a, std::vector<int> &b,
-                   std::vector<int> &c){
-    for(int i=0; i<a.size(); i++){
+void error_check(int* a, int* b, int* c, int n){
+    for(int i=0; i<n; i++){
         assert(c[i] == a[i] + b[i]);
     }
 }
 
 // print vector add result
-void print_result(std::vector<int>&a, std::vector<int> &b,
-                   std::vector<int> &c){
-    for(int i=0; i<a.size(); i++){
-        std::cout<<"c["<<i<<"] = "<<c[i]<<"="<<" a["<<i<<"] = "<<a[i]<<" b["<<i<<"] = "<<b[i]<<'\n';
+void print_result(int* a, int* b, int* c, int n){
+    for(int i=0; i<n; i++){
+        if(i%100==0)
+            std::cout<<"c["<<i<<"]="<<c[i]<<" = "<<"a["<<i<<"]="<<a[i]<<" + " <<"b["<<i<<"]="<<b[i]<<'\n';
     }
 }
 
 
 int main(){
-    // Array size of 2*16 (65536 elements)
-    constexpr int N = 1<<16;
-    constexpr size_t bytes = sizeof(int) * N;
+    // Vector size of 2^16 (65536 elements)
+    int n = 1<<16;
 
-    // Vectors for holding the host-side (CPU-side) data
-    std::vector<int> a;
-    a.reserve(N);
-    std::vector<int> b;
-    b.reserve(N);
-    std::vector<int> c;
-    c.reserve(N);
-    // Initialize random numbers in each array
-    for( int i=0; i<N; i++){
-        a.push_back(rand() * 100);
-        b.push_back(rand() * 100);
-    }
+    // Host vector pointers
+    int *h_a, *h_b, *h_c;
 
-    // Allocate memory on the device
+    // Device vector pointers
     int *d_a, *d_b, *d_c;
+
+    // Allocation size for all vectors
+    size_t bytes = sizeof(int) * n;
+
+    // Allocate host memory
+    h_a = (int*)malloc(bytes);
+    h_b = (int*)malloc(bytes);
+    h_c = (int*)malloc(bytes);
+
+    // Allocate device(gpu) memory
     cudaMalloc(&d_a, bytes);
     cudaMalloc(&d_b, bytes);
     cudaMalloc(&d_c, bytes);
 
+    /* There is something called unified memory.
+     * one set of memory that gets migrated between the GPU and CPU viceversa.
+     * [next lecture]
+     */
 
-    // Copy data from the host to the device (CPU -> GPU)
-    cudaMemcpy(d_a, a.data(), bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b, b.data(), bytes, cudaMemcpyHostToDevice);
+    // Initialize vectors a and b with random values between 0 and 99
+    matrix_init(h_a, n);
+    matrix_init(h_b, n);
 
-    // Threads per CTA(1024)
-    int NUM_THREADS = 1 <<10;
+    // Copy data from the CPU(HOST) to the GPU
+    cudaMemcpy(d_a, h_a, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b, h_b, bytes, cudaMemcpyHostToDevice);
 
-    // CTAs per Grid
-    // We need to launch at Least as many thread as we have elements
-    // This equation pads an extra CTA to the grid if N cannot evenly be dvided
-    // by NUM_THREADS (e.g. N=1025, NUM_THREADS = 1024)
-    int NUM_BLOCKS = ((N * NUM_THREADS -1) / NUM_THREADS);
+    // Threadblock size
+    // it's generally good to do this a size of 32 because these have to translate it to warps.
+    // which are of size 32.
+    int NUM_THREADS = 256;
 
-    // Launch the kernel on the GPU
-    // Kernel calls are asynchronous (the CPU program continues execution after call, but no necessarily before the kernel finishes)
-    vectorAdd<<<NUM_BLOCKS, NUM_THREADS>>>(d_a, d_b, d_c, N);
+    // Grid size
+    // NUM_THREAD * NUM_BLOCKS = NUMBER of Elements.
+    int NUM_BLOCKS = (int)ceil(n/NUM_THREADS);
+
+    // Launch kernel on default strem w/o
+    vectorAdd<<<NUM_BLOCKS, NUM_THREADS>>>(d_a, d_b, d_c, n);
 
     // Copy sum vector from device to host
-    // cudaMemcpy is a synchronous operation, and wiats for the prior kernel
-    // launch to complete (both go to the default stream in this case).
-    // Therefore, this cudaMemcpy acts as both a memcpy and synchronization barrier.
-    cudaMemcpy(c.data(), d_c, bytes, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_c, d_c, bytes, cudaMemcpyDeviceToHost);
 
     // Check result for errors
-    verify_result(a,b,c);
-
-    // print result
-    print_result(a,b,c);
-
-    // Free memory on device
-    cudaFree(d_a);
-    cudaFree(d_b);
-    cudaFree(d_c);
-
-    std::cout << "COMPLETED SUCCESSFULLY\n";
-
+    error_check(h_a, h_b, h_c, n);
+    print_result(h_a, h_b, h_c, n);
+    printf("COMPLETED SUCCESFULLY\n");
     return 0;
 }
